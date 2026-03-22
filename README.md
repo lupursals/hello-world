@@ -129,21 +129,51 @@ The release workflow (`.github/workflows/release.yml`) triggers on:
 - Push to tags matching `v*`
 - Manual dispatch (`workflow_dispatch`)
 
-### Pipeline Steps
+### Pipeline Architecture
 
-| Job | Description |
-|-----|-------------|
-| **lint** | Runs `ruff check` and `ruff format --check` |
-| **test** | Runs `pytest` |
-| **docker** | Builds and pushes image to `ghcr.io/oriolrius/hello-world` |
-| **deploy** | Deploys to EKS and verifies load balancing |
+![CI/CD Pipeline Architecture](.github/workflows/docs/cicd-architecture.png)
+
+The diagram above shows the full pipeline from a developer pushing a tag to the application running in production:
+
+- **Blue arrows** – Git operations (push tag → GitHub repository)
+- **Purple arrows** – CI/CD flow through GitHub Actions jobs
+- **Orange arrows** – Container image build and pull (Docker → ghcr.io registry)
+- **Green arrows** – Deployment and end-user traffic (EKS → Load Balancer → users)
+- **Gray arrows** – Kubernetes-internal communication (EKS service → pods)
+
+### What you see on the GitHub Actions screen
+
+When a release run is triggered you will see **five jobs** in the workflow:
+
+```
+┌──────┐     ┌──────┐
+│ Lint │     │ Test │   ← Stage 1: quality gates (run in parallel)
+└──┬───┘     └──┬───┘
+   └─────┬───────┘
+    ┌────▼────┐  ┌─────────┐
+    │ Docker  │  │ Release │  ← Stage 2: build & publish (run in parallel)
+    └────┬────┘  └─────────┘
+    ┌────▼────┐
+    │ Deploy  │             ← Stage 3: deploy to EKS
+    └─────────┘
+```
+
+| Job | What it does | Depends on |
+|-----|-------------|------------|
+| **lint** | Runs `ruff check` + `ruff format --check` | — |
+| **test** | Runs `pytest` | — |
+| **release** | Creates a GitHub Release with auto-generated notes | lint, test (tag pushes only) |
+| **docker** | Builds the Docker image and pushes it to `ghcr.io/oriolrius/hello-world` | lint, test |
+| **deploy** | Deploys to the `esade-teaching` EKS cluster and verifies load balancing | docker |
+
+Stages 1 and 2 run their jobs in parallel to keep the total pipeline time short. Stage 3 only starts once the Docker image is available in the registry.
 
 ### Verification
 
 The deploy job verifies:
 - All pods are running and healthy
 - Response format is correct (`hello-world from <pod-name>`)
-- Load balancer distributes traffic to multiple pods
+- Load balancer distributes traffic to multiple pods (at least 2 unique pods reached in 20 requests)
 
 ### Trigger Deployment
 
